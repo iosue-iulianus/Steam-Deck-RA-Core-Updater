@@ -1,0 +1,1 @@
+# Steam Deck RetroArch Core Updater
