@@ -2,7 +2,7 @@
 
 *Transform your RetroArch experience with a user-friendly interface that works seamlessly in both desktop and game modes.*
 
-![Application Screenshot](app.jpg)
+![Application Demo](app-demo.gif)
 
 I have seen many users on the Steam Deck forums on Reddit and elsewhere relying on the Flatpak version of RetroArch from the Discover Store due to the core availability over the Steam version, and the Steam version relying on it's DLC. 
 
@@ -18,12 +18,6 @@ This application will simplify that process for end-users, because ☁️STEAM C
 - One-click downloading of RetroArch cores for any version
 - Version selector with all available Libretro releases
 - Real-time progress tracking with detailed status log
-
-## How to use this script
-- On your Steam Deck, switch to Desktop Mode and download the Bash script `update_RA_cores.sh` from this repository
-- By default, this should download to your Downloads folder at `/home/deck/Downloads`
-- Right-click on the file in Dolphin (default File Explorer)-> Properties
-- Click on the `Permissions` tab, and ensure that you select the checkbox next to `Is Executable` -> click `OK`
 
 ### ⚡ **Steam Deck Optimized**
 - Works perfectly in both desktop mode and game mode
@@ -46,9 +40,12 @@ To launch from Steam in game mode:
 1. Switch to **Desktop Mode**
 2. **Right-click** the AppImage → **Add to Steam**
 3. In Steam, go to your **Library** → **Non-Steam** games
-4. Find "RetroArch Core Updater" and launch it
+4. Find "RetroArch Core Updater"
+5. **Edit controller settings for the "game" and use the "Keyboard (WASD) and Mouse" Template!**
+6. Launch Application
 
-*The application works perfectly in both desktop mode and Steam Deck game mode.*
+*The application works in both desktop mode and Steam Deck game mode.*
+#### Custom Steam Grid and Logo assets have been included in the repo under the ./assets folder if you would like to use them for Game Mode
 
 ## Usage
 
@@ -117,7 +114,13 @@ For developers who want to build the AppImage from source:
 2. **Install Python dependencies to AppImage:**
    ```bash
    # Install dependencies only (not the app itself)
-   uv pip install --target RetroArch-Core-Updater.AppDir/usr/lib/python3/site-packages PySide6>=6.5.0 requests>=2.31.0
+   # Keyboard-only build:
+   uv pip install --target RetroArch-Core-Updater.AppDir/usr/lib/python3/site-packages "PySide6>=6.5.0" "requests>=2.31.0"
+
+   # Gamepad support (recommended for Steam/Game Mode):
+   # Qt for Python 6.8+ no longer provides QtGamepad bindings. Pin to 6.7.* where QtGamepad is still available via the Addons wheel.
+   # Installing the meta package `PySide6==6.7.*` pulls in both Essentials and Addons (including QtGamepad).
+   uv pip install --target RetroArch-Core-Updater.AppDir/usr/lib/python3/site-packages "PySide6==6.7.*" "requests>=2.31.0"
    ```
 
 3. **Copy application source and create proper AppImage structure:**
@@ -125,7 +128,8 @@ For developers who want to build the AppImage from source:
    # Copy source code directory (preserves import structure)
    cp -r src RetroArch-Core-Updater.AppDir/opt/app/
    
-   # Copy icon to AppDir root
+   # Copy assets to AppDir root
+   cp -r assets RetroArch-Core-Updater.AppDir/opt/app/
    cp assets/retroarch-core-updater.png RetroArch-Core-Updater.AppDir/
    cp assets/retroarch-core-updater.png RetroArch-Core-Updater.AppDir/usr/share/icons/hicolor/128x128/apps/   
    ```
@@ -136,21 +140,15 @@ For developers who want to build the AppImage from source:
    ```bash
    cat > RetroArch-Core-Updater.AppDir/AppRun << 'EOF'
    #!/bin/bash
-   
-   # AppImage entry point for RetroArch Core Updater
-   HERE="$(dirname "$(readlink -f "${0}")")"
-   
-   # Add our Python packages to the path
-   export PYTHONPATH="${HERE}/usr/lib/python3/site-packages:${HERE}/opt/app:${PYTHONPATH}"
-   
-   # Add system libraries to path
-   export LD_LIBRARY_PATH="${HERE}/usr/lib:${LD_LIBRARY_PATH}"
-   
-   # Change to app directory to ensure relative paths work
-   cd "${HERE}/opt/app"
-   
-   # Run our Python application directly
-   exec python3 "${HERE}/opt/app/src/main.py" "$@"
+   APPDIR="${APPDIR:-$(dirname "$(readlink -f "$0")")}"
+
+   export PYTHONPATH="${APPDIR}/usr/lib/python3/site-packages:${APPDIR}/opt/app:${PYTHONPATH}"
+   export LD_LIBRARY_PATH="${APPDIR}/usr/lib:${APPDIR}/usr/lib/python3/site-packages/PySide6/Qt/lib:${LD_LIBRARY_PATH}"
+   export QT_PLUGIN_PATH="${APPDIR}/usr/lib/python3/site-packages/PySide6/Qt/plugins:${QT_PLUGIN_PATH}"
+   export QT_QPA_PLATFORM="wayland;xcb"
+
+   cd "${APPDIR}/opt/app"
+   exec python3 "${APPDIR}/opt/app/src/main.py" "$@"
    EOF
    ```
 
@@ -183,7 +181,7 @@ For developers who want to build the AppImage from source:
 
 5. **Download AppImageTool for building the AppImage:**
    ```bash
-   wget -O appimagetool https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage && \
+   wget -O appimagetool https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
    chmod +x appimagetool
    ```
 

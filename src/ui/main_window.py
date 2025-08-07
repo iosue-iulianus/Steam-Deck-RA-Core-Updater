@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Main window for RetroArch Core Updater."""
 
-from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                               QLabel, QComboBox, QPushButton, QGroupBox,
                               QTextEdit, QMessageBox, QSplitter, QFrame, QProgressBar)
-from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QFont, QIcon, QPalette, QPixmap
+from PySide6.QtCore import Qt, QThread, Signal, QTimer, QEvent, QSize
+from PySide6.QtGui import QFont, QIcon, QPalette, QPixmap, QKeyEvent, QShortcut, QKeySequence, QMovie
+from pathlib import Path
 
 from core.detector import RetroArchDetector
 from core.version_fetcher import VersionFetcher
@@ -42,23 +43,42 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(900, 700)
         self.resize(1000, 750)
         
+        # Enable keyboard focus for main window
+        self.setFocusPolicy(Qt.StrongFocus)
+        
         # Initialize components
         self.detector = RetroArchDetector()
         self.version_fetcher = VersionFetcher()
         self.update_manager = UpdateManager()
         self.settings = SettingsManager()
         
+        # Assets and animation placeholders
+        self.assets_dir = Path(__file__).resolve().parents[2] / 'assets'
+        self.sonic_label = None
+        self.sonic_wait_movie = None
+        self.sonic_run_movie = None
+        
         # UI state
         self.installations = []
         self.available_versions = []
         self.version_loader = None
         
+        # Gamepad focus management
+        self.focusable_widgets = []
+        self.current_focus_index = 0
+        
         self._setup_ui()
         self._apply_steam_deck_styling()
+        self._setup_focus_system()
+        self._setup_shortcuts()
+        self._setup_gamepad()
         self._load_initial_data()
         
         # Load saved settings
         self._restore_settings()
+        
+        # Ensure main window can receive keyboard input
+        self.setFocus()
     
     def _setup_ui(self):
         """Set up the user interface."""
@@ -104,6 +124,7 @@ class MainWindow(QMainWindow):
         
         # Title
         title_label = QLabel("🎮 RetroArch Core Updater")
+        title_label.setFrameStyle(QFrame.Shape.NoFrame)
         title_font = QFont()
         title_font.setPointSize(22)
         title_font.setBold(True)
@@ -112,6 +133,7 @@ class MainWindow(QMainWindow):
         
         # Subtitle
         subtitle_label = QLabel("Download and install the latest RetroArch cores for SteamOS")
+        subtitle_label.setFrameStyle(QFrame.Shape.NoFrame)
         subtitle_label.setStyleSheet("color: #aaa !important; font-size: 14px;")
         subtitle_label.setWordWrap(True)
         header_layout.addWidget(subtitle_label)
@@ -135,6 +157,7 @@ class MainWindow(QMainWindow):
         version_layout = QVBoxLayout()
         version_layout.setSpacing(8)
         version_label = QLabel("RetroArch Version:")
+        version_label.setFrameStyle(QFrame.Shape.NoFrame)
         font = QFont()
         font.setBold(True)
         font.setPointSize(12)
@@ -153,6 +176,7 @@ class MainWindow(QMainWindow):
         location_layout = QVBoxLayout()
         location_layout.setSpacing(8)
         location_label = QLabel("Installation Location:")
+        location_label.setFrameStyle(QFrame.Shape.NoFrame)
         font = QFont()
         font.setBold(True)
         font.setPointSize(12)
@@ -188,14 +212,79 @@ class MainWindow(QMainWindow):
                 background-color: #666;
                 color: #999 !important;
             }
+            QPushButton:focus {
+                border: 3px solid #ffffff !important;
+            }
         """)
         self.update_button.clicked.connect(self._start_update)
         self.update_button.setEnabled(False)
         config_layout.addWidget(self.update_button)
         
+        # Sonic animation area under the Update Cores button
+        self.sonic_label = QLabel()
+        self.sonic_label.setAlignment(Qt.AlignCenter)
+        self.sonic_label.setMinimumHeight(140)
+        config_layout.addWidget(self.sonic_label)
+        
+        # Initialize and show idle animation
+        self._init_sonic_movies()
+        self._set_idle_animation()
+        
         config_layout.addStretch()
         
         return config_widget
+
+    def _init_sonic_movies(self):
+        """Initialize QMovie instances for idle and running animations and scale them similarly."""
+        try:
+            wait_path = self.assets_dir / 'sonic-wait.gif'
+            run_path = self.assets_dir / 'sonic-run.gif'
+
+            if wait_path.exists():
+                self.sonic_wait_movie = QMovie(str(wait_path))
+                self.sonic_wait_movie.setCacheMode(QMovie.CacheAll)
+            if run_path.exists():
+                self.sonic_run_movie = QMovie(str(run_path))
+                self.sonic_run_movie.setCacheMode(QMovie.CacheAll)
+
+            # Scale both to a common target height, preserving aspect ratio
+            target_height = 140
+            for movie in (self.sonic_wait_movie, self.sonic_run_movie):
+                if movie:
+                    movie.jumpToFrame(0)
+                    frame_size = movie.frameRect().size()
+                    orig_w = max(frame_size.width(), 1)
+                    orig_h = max(frame_size.height(), 1)
+                    scaled_w = int(orig_w * (target_height / orig_h))
+                    movie.setScaledSize(QSize(scaled_w, target_height))
+
+        except Exception:
+            self.sonic_wait_movie = None
+            self.sonic_run_movie = None
+
+    def _set_idle_animation(self):
+        """Show the idle (waiting) animation under the Update button."""
+        if self.sonic_label is None:
+            return
+        if self.sonic_run_movie and self.sonic_label.movie() is self.sonic_run_movie:
+            self.sonic_run_movie.stop()
+        if self.sonic_wait_movie:
+            self.sonic_label.setMovie(self.sonic_wait_movie)
+            self.sonic_wait_movie.start()
+        else:
+            self.sonic_label.setText("")
+
+    def _set_running_animation(self):
+        """Show the running animation while an update is ongoing."""
+        if self.sonic_label is None:
+            return
+        if self.sonic_wait_movie and self.sonic_label.movie() is self.sonic_wait_movie:
+            self.sonic_wait_movie.stop()
+        if self.sonic_run_movie:
+            self.sonic_label.setMovie(self.sonic_run_movie)
+            self.sonic_run_movie.start()
+        else:
+            self.sonic_label.setText("")
     
     def _create_config_panel(self):
         """Create the configuration panel."""
@@ -272,6 +361,7 @@ class MainWindow(QMainWindow):
         
         # Progress section (initially hidden)
         self.progress_frame = QFrame()
+        self.progress_frame.setObjectName("progress_frame")
         self.progress_frame.setVisible(False)
         progress_layout = QVBoxLayout(self.progress_frame)
         progress_layout.setContentsMargins(10, 10, 10, 10)
@@ -337,19 +427,314 @@ class MainWindow(QMainWindow):
         """Create the footer section."""
         footer_layout = QHBoxLayout()
         
-        # Status label
-        self.status_label = QLabel("Ready")
-        self.status_label.setStyleSheet("font-size: 12px; color: #666;")
-        footer_layout.addWidget(self.status_label)
-        
         footer_layout.addStretch()
         
         # Refresh button
-        refresh_button = QPushButton("🔄 Refresh")
-        refresh_button.clicked.connect(self._refresh_data)
-        footer_layout.addWidget(refresh_button)
+        self.refresh_button = QPushButton("🔄 Refresh")
+        self.refresh_button.clicked.connect(self._refresh_data)
+        footer_layout.addWidget(self.refresh_button)
+        
+        # Exit button
+        self.exit_button = QPushButton("🛑 Exit")
+        self.exit_button.setObjectName("exitButton")
+        self.exit_button.clicked.connect(self._exit_application)
+        footer_layout.addWidget(self.exit_button)
         
         layout.addLayout(footer_layout)
+    
+    def _setup_focus_system(self):
+        """Set up gamepad focus management system."""
+        # List of focusable widgets in tab order
+        self.focusable_widgets = [
+            self.version_combo,
+            self.location_combo, 
+            self.update_button,
+            self.refresh_button,
+            self.exit_button
+        ]
+        
+        # Set focus policies on all widgets
+        for widget in self.focusable_widgets:
+            widget.setFocusPolicy(Qt.StrongFocus)
+            
+        # Set initial focus to first widget
+        if self.focusable_widgets:
+            self.current_focus_index = self._find_next_enabled_index(start_index=0, step=1)
+            self._update_focus()
+            print(f"Focus system initialized with {len(self.focusable_widgets)} widgets")
+
+    def _find_next_enabled_index(self, start_index: int, step: int) -> int:
+        """Find the next index in focusable_widgets that is enabled.
+
+        step: 1 for forward/down, -1 for backward/up
+        """
+        if not self.focusable_widgets:
+            return 0
+
+        count = len(self.focusable_widgets)
+        index = start_index % count
+        for _ in range(count):
+            widget = self.focusable_widgets[index]
+            if widget.isEnabled():
+                return index
+            index = (index + step) % count
+        return start_index % count
+    
+    def _update_focus(self):
+        """Update the currently focused widget."""
+        if not self.focusable_widgets:
+            return
+            
+        # Clear focus from all widgets
+        for widget in self.focusable_widgets:
+            widget.clearFocus()
+            
+        # Set focus to current widget
+        current_widget = self.focusable_widgets[self.current_focus_index]
+        current_widget.setFocus(Qt.TabFocusReason)
+        
+        # Debug output
+        print(f"Focus set to widget {self.current_focus_index}: {type(current_widget).__name__}")
+    
+    def _navigate_focus(self, direction):
+        """Navigate focus up or down through focusable widgets."""
+        if not self.focusable_widgets:
+            return
+        
+        print(f"Navigating focus {direction} from index {self.current_focus_index}")
+            
+        step = -1 if direction == "up" else 1
+        next_index = (self.current_focus_index + step) % len(self.focusable_widgets)
+        self.current_focus_index = self._find_next_enabled_index(start_index=next_index, step=step)
+        self._update_focus()
+
+    def _has_active_popup(self) -> bool:
+        """Return True if a popup (e.g., QComboBox dropdown) is open."""
+        return QApplication.activePopupWidget() is not None
+
+    def _get_open_combo(self) -> QComboBox | None:
+        """Return the QComboBox whose popup is currently open, if any."""
+        combos = [self.version_combo, self.location_combo]
+        for combo in combos:
+            try:
+                view = combo.view()
+                if view is not None and view.isVisible():
+                    return combo
+            except Exception:
+                continue
+        # Fallback: if focus widget is a combo and its popup is open
+        fw = QApplication.focusWidget()
+        if isinstance(fw, QComboBox):
+            view = fw.view()
+            if view is not None and view.isVisible():
+                return fw
+        return None
+
+    def _send_key_to_active_popup(self, key: int):
+        """Send a key press/release to the currently active popup widget."""
+        popup = QApplication.activePopupWidget()
+        if not popup:
+            return
+        press = QKeyEvent(QEvent.KeyPress, key, Qt.NoModifier)
+        release = QKeyEvent(QEvent.KeyRelease, key, Qt.NoModifier)
+        QApplication.sendEvent(popup, press)
+        QApplication.sendEvent(popup, release)
+
+    def _setup_shortcuts(self):
+        """Set up application-wide keyboard shortcuts for navigation and activation."""
+        self._shortcuts = []
+
+        def add_shortcut(key_sequence, handler):
+            shortcut = QShortcut(QKeySequence(key_sequence), self)
+            shortcut.setContext(Qt.ApplicationShortcut)
+            shortcut.activated.connect(handler)
+            self._shortcuts.append(shortcut)
+
+        # Up navigation: Arrow Up and W
+        add_shortcut(Qt.Key_Up, self._shortcut_navigate_up)
+        add_shortcut("W", self._shortcut_navigate_up)
+
+        # Down navigation: Arrow Down and S
+        add_shortcut(Qt.Key_Down, self._shortcut_navigate_down)
+        add_shortcut("S", self._shortcut_navigate_down)
+
+        # Activate: Enter / Return / Space
+        add_shortcut(Qt.Key_Return, self._shortcut_activate)
+        add_shortcut(Qt.Key_Enter, self._shortcut_activate)
+        add_shortcut(Qt.Key_Space, self._shortcut_activate)
+
+        # Exit: Escape
+        add_shortcut(Qt.Key_Escape, self._shortcut_exit)
+
+    def _shortcut_navigate_up(self):
+        open_combo = self._get_open_combo()
+        if open_combo is not None:
+            # Move highlight/selection up within the combo
+            count = open_combo.count()
+            if count > 0:
+                new_idx = (open_combo.currentIndex() - 1) % count
+                open_combo.setCurrentIndex(new_idx)
+            return
+        self._navigate_focus("up")
+
+    def _shortcut_navigate_down(self):
+        open_combo = self._get_open_combo()
+        if open_combo is not None:
+            # Move highlight/selection down within the combo
+            count = open_combo.count()
+            if count > 0:
+                new_idx = (open_combo.currentIndex() + 1) % count
+                open_combo.setCurrentIndex(new_idx)
+            return
+        self._navigate_focus("down")
+
+    def _shortcut_activate(self):
+        # If a popup is open, let it handle activation/selection
+        open_combo = self._get_open_combo()
+        if open_combo is not None:
+            # Commit current selection and close
+            open_combo.hidePopup()
+            return
+        self._activate_current_widget()
+
+    def _shortcut_exit(self):
+        open_combo = self._get_open_combo()
+        if open_combo is not None:
+            # Close popup without further action
+            open_combo.hidePopup()
+            return
+        self._exit_application()
+
+    def _setup_gamepad(self):
+        """Initialize optional Qt Gamepad navigation for Steam/Game Mode."""
+        self.gamepad = None
+        try:
+            from PySide6.QtGamepad import QGamepad, QGamepadManager
+        except Exception:
+            return
+
+        self._QGamepad = QGamepad
+        self._QGamepadManager = QGamepadManager
+
+        self._init_first_available_gamepad()
+
+        # React to hotplug in Steam/Game Mode where the virtual controller may appear after launch
+        mgr = QGamepadManager.instance()
+        try:
+            mgr.connectedGamepadsChanged.connect(self._on_gamepads_changed)
+        except Exception:
+            # Older bindings may use different signal names; ignore if unavailable
+            pass
+
+    def _init_first_available_gamepad(self):
+        mgr = self._QGamepadManager.instance()
+        devices = mgr.connectedGamepads()
+        if not devices:
+            return
+        device_id = int(devices[0])
+        self._bind_gamepad(device_id)
+
+    def _bind_gamepad(self, device_id: int):
+        # Clean up any previous instance
+        if getattr(self, "gamepad", None) is not None:
+            try:
+                self.gamepad.deleteLater()
+            except Exception:
+                pass
+        self.gamepad = self._QGamepad(device_id, self)
+
+        # Debounce on-press actions
+        def on_changed(pressed: bool, action):
+            if pressed:
+                action()
+
+        # DPAD navigation
+        self.gamepad.buttonUpChanged.connect(lambda v: on_changed(v, self._shortcut_navigate_up))
+        self.gamepad.buttonDownChanged.connect(lambda v: on_changed(v, self._shortcut_navigate_down))
+
+        # Left stick as navigation (use threshold)
+        def on_axis_y_changed(value: float):
+            if abs(value) < 0.6:
+                return
+            # Throttle repeats with a short timer
+            if getattr(self, "_axis_nav_lock", False):
+                return
+            self._axis_nav_lock = True
+            if value < 0:
+                self._shortcut_navigate_up()
+            else:
+                self._shortcut_navigate_down()
+            QTimer.singleShot(180, lambda: setattr(self, "_axis_nav_lock", False))
+
+        self.gamepad.axisLeftYChanged.connect(on_axis_y_changed)
+
+        # A/B buttons
+        self.gamepad.buttonAChanged.connect(lambda v: on_changed(v, self._shortcut_activate))
+        self.gamepad.buttonBChanged.connect(lambda v: on_changed(v, self._shortcut_exit))
+
+        # No logging to status area for gamepad connection
+
+    def _on_gamepads_changed(self):
+        try:
+            mgr = self._QGamepadManager.instance()
+            devices = mgr.connectedGamepads()
+        except Exception:
+            return
+        if devices and self.gamepad is None:
+            self._bind_gamepad(int(devices[0]))
+        elif not devices and self.gamepad is not None:
+            try:
+                self.gamepad.deleteLater()
+            except Exception:
+                pass
+            self.gamepad = None
+    
+    def _activate_current_widget(self):
+        """Activate the currently focused widget."""
+        if not self.focusable_widgets:
+            return
+            
+        current_widget = self.focusable_widgets[self.current_focus_index]
+        print(f"Activating widget {self.current_focus_index}: {type(current_widget).__name__}")
+        
+        # Handle different widget types
+        if isinstance(current_widget, QPushButton):
+            current_widget.click()
+        elif isinstance(current_widget, QComboBox):
+            # Open combo box dropdown
+            current_widget.showPopup()
+    
+    def keyPressEvent(self, event: QKeyEvent):
+        """Handle gamepad and keyboard input events."""
+        key = event.key()
+        
+        # Debug output
+        print(f"Key pressed: {key}, current focus index: {self.current_focus_index}")
+        
+        # D-pad and Left Stick navigation (Arrow keys, WASD)
+        if key in [Qt.Key_Up, Qt.Key_W]:
+            self._navigate_focus("up")
+            event.accept()
+            return
+        elif key in [Qt.Key_Down, Qt.Key_S]:
+            self._navigate_focus("down") 
+            event.accept()
+            return
+        
+        # A button - activate current widget (Enter, Space)
+        elif key in [Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space]:
+            self._activate_current_widget()
+            event.accept()
+            return
+            
+        # B button - exit application (Escape)
+        elif key == Qt.Key_Escape:
+            self._exit_application()
+            event.accept()
+            return
+            
+        # Pass other events to parent
+        super().keyPressEvent(event)
     
     def _apply_steam_deck_styling(self):
         """Apply modern, Steam-compatible styling."""
@@ -405,6 +790,7 @@ class MainWindow(QMainWindow):
             }
             QComboBox:focus {
                 border-color: #4a90e2 !important;
+                border-width: 3px !important;
                 background: #404040 !important;
                 outline: none;
             }
@@ -454,6 +840,7 @@ class MainWindow(QMainWindow):
             QLabel {
                 color: #ffffff !important;
                 background: transparent !important;
+                border: none !important;
             }
             QPushButton {
                 border: 2px solid #606060 !important;
@@ -474,12 +861,37 @@ class MainWindow(QMainWindow):
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
                     stop:0 #353535, stop:1 #2a2a2a) !important;
             }
+            QPushButton:focus {
+                border-color: #4a90e2 !important;
+                border-width: 3px !important;
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
+                    stop:0 #4a4a4a, stop:1 #3f3f3f) !important;
+                outline: none;
+            }
+            /* Exit button overrides: red background and red border when not focused; blue border on focus */
+            QPushButton#exitButton {
+                background: #b71c1c !important; /* deep red */
+                border-color: #b71c1c !important;
+            }
+            QPushButton#exitButton:hover {
+                background: #c62828 !important; /* brighter red */
+                border-color: #c62828 !important;
+            }
+            QPushButton#exitButton:pressed {
+                background: #8e0000 !important; /* darker red */
+                border-color: #8e0000 !important;
+            }
+            QPushButton#exitButton:focus {
+                background: #c62828 !important; /* keep red background when focused */
+                border-color: #4a90e2 !important; /* blue border to indicate focus */
+                border-width: 3px !important;
+            }
             QPushButton:disabled {
                 background: #666 !important;
                 color: #999 !important;
                 border-color: #555 !important;
             }
-            QFrame {
+            QFrame#progress_frame {
                 background: rgba(40, 40, 40, 0.8) !important;
                 border: 1px solid #4a4a4a !important;
                 border-radius: 10px;
@@ -591,11 +1003,6 @@ class MainWindow(QMainWindow):
         has_location = self.location_combo.currentData() is not None
         
         self.update_button.setEnabled(has_version and has_location)
-        
-        if has_version and has_location:
-            self.status_label.setText("Ready to update")
-        else:
-            self.status_label.setText("Select version and location")
     
     def _start_update(self):
         """Start the update process."""
@@ -627,6 +1034,8 @@ class MainWindow(QMainWindow):
             error_callback=self._log_error,
             finished_callback=self._on_update_finished
         )
+        # Switch to running animation
+        self._set_running_animation()
     
     def _cancel_update(self):
         """Cancel the current update."""
@@ -634,12 +1043,18 @@ class MainWindow(QMainWindow):
         self._log_message("❌ Update cancelled by user")
         self._hide_progress_panel()
         self.update_button.setEnabled(True)
+        self._set_idle_animation()
+    
+    def _exit_application(self):
+        """Exit the application."""
+        self.close()
     
     def _on_update_finished(self, success: bool):
         """Handle update completion."""
         # Hide progress panel and re-enable update button
         self._hide_progress_panel()
         self.update_button.setEnabled(True)
+        self._set_idle_animation()
         
         if success:
             self._log_message("✅ Update completed successfully!")
